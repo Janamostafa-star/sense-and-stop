@@ -10,7 +10,7 @@ data/external/
 *.npz
 outputs/*
 !outputs/.gitkeep
-
+data/derived/
 # python
 __pycache__/
 .ipynb_checkpoints/

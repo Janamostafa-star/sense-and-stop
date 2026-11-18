@@ -1,9 +1,9 @@
-# PROVISIONAL: paths below are hard-coded to the author's machine; set them before running.
+import os
 import numpy as np
+import yaml
 from pathlib import Path
 from scipy.sparse import load_npz
 
-SCRATCH = Path(r'D:\sense_stop_scratch')
 NT, NY, NX = 271, 201, 301
 DT_S, DX_MM = 2.0, 0.1
 SPEED_MM_PER_MIN = 2.6
@@ -13,6 +13,42 @@ FWHM_TO_SIGMA = 2.3548
 SCALES_AM = (1e-9, 1e-8, 1e-7)       # dipole moment per source at u = 1 (1, 10, 100 nAm)
 V_TO_UV = 1e6
 SEED = 0
+
+
+def load_cfg(path="configs/config.yaml"):
+    """Read the master config. Relative to the repo root: run scripts from there."""
+    with open(path) as f:
+        return yaml.safe_load(f)
+
+
+def data_dir(cfg):
+    """Folder with the derived files (H_bip.npz, A_matrix.npz, ...), kept outside Git.
+    Override per machine with the environment variable SENSE_STOP_DATA."""
+    d = Path(os.environ.get("SENSE_STOP_DATA", cfg["paths"]["data_dir"]))
+    if not d.is_dir():
+        raise FileNotFoundError(
+            f"data folder not found: {d}. Set SENSE_STOP_DATA or paths.data_dir in configs/config.yaml")
+    return d
+
+
+def model_cfg(cfg):
+    """M3's config with the forward side's override from config.yaml applied.
+    model_default.yaml stays 1D for M3's tests; the dimension comes from config.yaml."""
+    from src.model import load_config
+    m = load_config(cfg["paths"]["model_config"])
+    m["model"]["dimension"] = cfg["model"]["dimension"]
+    return m
+
+
+def check_grid(res, patch, noise_dt):
+    """Fail loudly if M3's output does not match the grid that A was built for."""
+    u, x, y, t = res["u"], res["x"], res["y"], res["t"]
+    nx, ny, dx = int(patch["nx"]), int(patch["ny"]), float(patch["dx_mm"])
+    assert u.ndim == 3, "forward side needs 2D u[t, y, x]; set model.dimension = 2"
+    assert u.shape[1:] == (ny, nx), f"grid {u.shape[1:]} != A's grid {(ny, nx)}"
+    assert np.allclose(x, np.arange(nx) * dx) and np.allclose(y, np.arange(ny) * dx), \
+        "x/y nodes differ from A's grid"
+    assert np.allclose(np.diff(t), noise_dt), "output_dt differs from the noise time step"
 
 
 def make_sensors(u, H_bip, A, scale_am, noise_V, rng, noise_gain=1.0):
@@ -27,9 +63,12 @@ def make_sensors(u, H_bip, A, scale_am, noise_V, rng, noise_gain=1.0):
 
 
 if __name__ == '__main__':
-    H_bip = np.load(SCRATCH / 'H_bip.npz', allow_pickle=True)['H_bip']
-    A = load_npz(SCRATCH / 'A_matrix.npz')
-    noise_V = np.load(SCRATCH / 'noise_2s.npz', allow_pickle=True)['noise_V']
+    cfg = load_cfg()
+    D = data_dir(cfg)
+    files = cfg["forward"]["files"]
+    H_bip = np.load(D / files["H_bip"], allow_pickle=True)['H_bip']
+    A = load_npz(D / files["A"])
+    noise_V = np.load(D / files["noise"], allow_pickle=True)['noise_V']
     rng = np.random.default_rng(SEED)
 
     t = np.arange(NT) * DT_S
